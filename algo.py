@@ -1,3 +1,4 @@
+import warnings
 import pandas as pd
 import numpy as np
 
@@ -6,10 +7,13 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 from statsmodels.tsa.stattools import coint
+import statsmodels.api as sm
 
 
 class Algo:
-    def __init__(self, data_path: Path, cash=25000, n_components=30, n_clusters=8):
+    def __init__(self, data_path: Path, cash=25000, n_components=30, n_clusters=8, mean_window=10):
+        warnings.simplefilter(action='ignore', category=Warning)
+
         self.original_data = pd.read_csv(data_path)
         self.original_data['Date'] = pd.to_datetime(self.original_data['Date'])
         self.original_data.set_index(['Ticker', 'Date'], inplace=True)
@@ -20,6 +24,7 @@ class Algo:
 
         self.n_components = n_components
         self.n_clusters = n_clusters
+        self.mean_window = mean_window
 
         self.actions = pd.DataFrame(columns=self.returns.columns)
         self.positions = [0] * len(self.returns.columns)
@@ -65,22 +70,35 @@ class Algo:
                                 curr_pairs.append((p_val, (cluster[i], cluster[j])))
 
                 curr_pairs = sorted(curr_pairs)
+                pairs = self.initialize_month(curr_data=curr_data, pairs=pairs, curr_pairs=curr_pairs)
 
-                print(curr_pairs)
-
+                print('hello')
 
         # pairs_spreads = pd.DataFrame()
         # for index, row in enumerate(data):
-            # EVERY MONTH WE GET NEW PAIRS TO TRADE
-            # if index % 30 == 0:
-                # run pca on [i - 60: i]
-                # get clusters for stocks
-                # calc initial averages and put into pairs spreads
-                # trade on this day
-            # else
-                # get spread of today and updates pairs_spreads
-                # for pair in pairs.columns:
-                    # trade
+        # EVERY MONTH WE GET NEW PAIRS TO TRADE
+        # if index % 30 == 0:
+        # run pca on [i - 60: i]
+        # get clusters for stocks
+        # calc initial averages and put into pairs spreads
+        # trade on this day
+        # else
+        # get spread of today and updates pairs_spreads
+        # for pair in pairs.columns:
+        # trade
+
+    def initialize_month(self, curr_data: pd.DataFrame, pairs: pd.DataFrame, curr_pairs: list[tuple]) -> pd.DataFrame:
+        for p_val, (stock_a, stock_b) in curr_pairs:
+            # converts into resid = stock_b - m(stock_a)
+            stock_a_preprocessed = sm.add_constant(curr_data[stock_a])
+
+            # Run OLS regression
+            model = sm.OLS(curr_data[stock_b], stock_a_preprocessed).fit()
+            pair_name = '(' + stock_a + ', ' + stock_b + ')'
+            pairs[pair_name] = model.resid
+            pairs[pair_name + '_' + str(self.mean_window) + 'MA'] = pairs[pair_name].rolling(
+                self.mean_window).mean()
+        return pairs
 
 
 if __name__ == '__main__':
