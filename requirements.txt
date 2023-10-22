@@ -5,3 +5,5 @@ matplotlib
 ipykernel
 scikit-learn
 statsmodels
+pydantic
+tqdm
