@@ -25,7 +25,7 @@ class Trade(BaseModel):
 
 
 class Algo:
-    def __init__(self, data_path: Path, cash=25000, n_components=12, n_clusters=6, use_log_returns=False, even_weight_multiplier=10):
+    def __init__(self, data_path: Path, cash=25000, n_components=12, n_clusters=6, use_log_returns=False, even_weight_multiplier=10, stop_loss=2):
         warnings.simplefilter(action='ignore', category=Warning)
 
         self.original_data = pd.read_csv(data_path)
@@ -45,6 +45,7 @@ class Algo:
         self.n_components = n_components
         self.n_clusters = n_clusters
         self.even_weight_multiplier = even_weight_multiplier
+        self.stop_loss = stop_loss
 
         self.actions = pd.DataFrame()
         self.positions = dict(zip(self.returns.columns, [0] * len(self.returns.columns)))
@@ -69,6 +70,7 @@ class Algo:
             # get pairs it's if the first of the month
             if day % look_back_window == 0:
                 # TODO: need to finish up open trades here
+                self.exit_positions(pairs, rebalance=True)
                 pairs = pd.DataFrame()
                 curr_pairs = []
 
@@ -105,6 +107,7 @@ class Algo:
             filtered_pairs, pairs = self.update_data(curr_data=curr_data, curr_pairs=curr_pairs, initial_update=initial)
 
             # TODO: add stop loss logic to exit positions
+
             self.exit_positions(pairs)
             self.trade_pairs(filtered_pairs, pairs)
             day += 1
@@ -172,14 +175,18 @@ class Algo:
         else:
             return False, days_actions
     
-    def exit_positions(self, pairs):
+    def exit_positions(self, pairs, rebalance=False):
         indices_to_delete = []
         for index, trade in enumerate(self.open_trades.copy()):
             curr_a_price = self.original_data.loc[trade.stock_a, 'Open'].loc[str(pairs.index.date[-1])]
-            curr_b_price = self.original_data.loc[trade.stock_b, 'Adj Close'].loc[str(pairs.index.date[-1])]
+            curr_b_price = self.original_data.loc[trade.stock_b, 'Open'].loc[str(pairs.index.date[-1])]
             pair_name = '(' + trade.stock_a + ', ' + trade.stock_b + ')'
+
+            percent_change_a = ((curr_a_price - trade.price_a) / trade.price_a) * 100
+            percent_change_b = ((curr_b_price - trade.price_b) / trade.price_b) * 100
+
             if trade.num_a < 0:
-                if pairs[pair_name + '_zscore'].iloc[-1] <= pairs[pair_name + '_mean'][-1]:
+                if (percent_change_a > self.stop_loss or percent_change_b < -1*self.stop_loss) or (pairs[pair_name + '_zscore'].iloc[-1] <= pairs[pair_name + '_mean'][-1] or rebalance):
                     self.positions[trade.stock_a] -= trade.num_a
                     self.cash += (curr_a_price - trade.price_a) * abs(trade.num_a)
                     self.debt -= trade.price_a * abs(trade.num_a)
@@ -190,7 +197,7 @@ class Algo:
                     indices_to_delete.append(index)
 
             if trade.num_b < 0:
-                if pairs[pair_name + '_zscore'].iloc[-1] >= pairs[pair_name + '_mean'][-1]:
+                if (percent_change_a < -1*self.stop_loss or percent_change_b > self.stop_loss) or (pairs[pair_name + '_zscore'].iloc[-1] >= pairs[pair_name + '_mean'][-1] or rebalance):
                     self.positions[trade.stock_b] -= trade.num_b
                     self.cash += (curr_b_price - trade.price_b) * abs(trade.num_b)
                     self.debt -= trade.price_b * abs(trade.num_b)
@@ -199,6 +206,10 @@ class Algo:
                     self.cash += curr_a_price * abs(trade.num_a)
                     self.assets -= trade.price_a * abs(trade.num_a)
                     indices_to_delete.append(index)
+            #stoploss: we need to have a check if our trade goes 2% below the point we bought it at. if it does, we
+            #cover our losses and buy it back
+
+
 
         for index in reversed(indices_to_delete):
             self.open_trades.remove(self.open_trades[index])
@@ -259,7 +270,7 @@ class Algo:
                 pairs[pair_name + '_lower_threshold'] = pairs[pair_name + '_zscore'].mean() - (
                         2 * pairs[pair_name + '_zscore'].std())
 
-            self.plot_zscores(pairs, pair_name, stock_a, stock_b)
+            # self.plot_zscores(pairs, pair_name, stock_a, stock_b)
 
         for index in reversed(curr_pairs_to_delete):
             curr_pairs.remove(curr_pairs[index])
