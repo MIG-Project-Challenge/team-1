@@ -58,7 +58,7 @@ class Algo:
         pairs = pd.DataFrame()
         filtered_pairs = {}
         curr_pairs = []
-        look_back_window = 60
+        look_back_window = 30
         day = look_back_window
         total = len(self.returns.iloc[look_back_window - 1:])
         for index, row in tqdm(enumerate(self.returns.iloc[look_back_window - 1:].iterrows()), total=total):
