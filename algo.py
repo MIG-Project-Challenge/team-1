@@ -25,12 +25,17 @@ class Trade(BaseModel):
 
 
 class Algo:
-    def __init__(self, data_path: Path, cash=25000, n_components=12, n_clusters=6, use_log_returns=False, even_weight_multiplier=10, stop_loss=2):
+    def __init__(self, data_path: Path, cash=25000, n_components=12, n_clusters=6, use_log_returns=False,
+                 even_weight_multiplier=10, stop_loss=2):
         warnings.simplefilter(action='ignore', category=Warning)
 
         self.original_data = pd.read_csv(data_path)
         self.original_data['Date'] = pd.to_datetime(self.original_data['Date'])
         self.original_data.set_index(['Ticker', 'Date'], inplace=True)
+        # TODO: REMOVE JUST TESTING
+        self.original_data = self.original_data[(self.original_data.index.get_level_values('Date') >= datetime(2017, 1, 1)) &
+                           (self.original_data.index.get_level_values('Date') <= datetime(2017, 6, 1))]
+
 
         self.use_log_returns = use_log_returns
         self.original_data['Ret'] = self.original_data['Open'].groupby('Ticker').pct_change()
@@ -41,6 +46,7 @@ class Algo:
                 self.original_data['Open'] / self.original_data['Open'].groupby('Ticker').shift(1))
             self.original_data.dropna(inplace=True)
             self.log_returns = self.original_data['Log Ret'].unstack(level='Ticker')
+        self.previous_months_pairs_open = []
 
         self.n_components = n_components
         self.n_clusters = n_clusters
@@ -49,6 +55,8 @@ class Algo:
 
         self.actions = pd.DataFrame()
         self.positions = dict(zip(self.returns.columns, [0] * len(self.returns.columns)))
+        self.daily_returns = pd.DataFrame()
+        self.portfolio_value = pd.Series()
         self.open_trades: list[Trade] = []
         self.cash = cash
         self.assets = 0
@@ -58,6 +66,7 @@ class Algo:
         pairs = pd.DataFrame()
         filtered_pairs = {}
         curr_pairs = []
+        daily_portfolio_values = []
         look_back_window = 30
         day = look_back_window
         total = len(self.returns.iloc[look_back_window - 1:])
@@ -69,9 +78,14 @@ class Algo:
             stocks = list(curr_data.columns)
             # get pairs it's if the first of the month
             if day % look_back_window == 0:
-                # TODO: need to finish up open trades here
-                self.exit_positions(pairs, rebalance=True)
-                pairs = pd.DataFrame()
+                # TODO: need to finish up open trades here, currently just trash all open trades where they are
+                result_set = {column
+                              for column in pairs.columns
+                              if all(f'({stock_a}, {stock_b})' not in column for (stock_a, stock_b) in
+                                     self.previous_months_pairs_open)}
+                result_list = list(result_set)
+                pairs = pairs[result_list]
+                self.previous_months_pairs_open = [(trade.stock_a, trade.stock_b) for trade in self.open_trades]
                 curr_pairs = []
 
                 # scale data and run PCA
@@ -107,20 +121,38 @@ class Algo:
             filtered_pairs, pairs = self.update_data(curr_data=curr_data, curr_pairs=curr_pairs, initial_update=initial)
 
             # TODO: add stop loss logic to exit positions
-
             self.exit_positions(pairs)
             self.trade_pairs(filtered_pairs, pairs)
+
+            daily_portfolio_values.append(self.calc_port_value(pairs))
             day += 1
 
-        print('hello')
+        self.exit_positions(pairs, rebalance=True)
+        daily_portfolio_values.pop(-1)
+        daily_portfolio_values.append(self.cash)
+        self.portfolio_value = pd.Series(index=self.returns.index[look_back_window - 1:], data=daily_portfolio_values)
+
+        self.returns = self.returns.T
+
+    def calc_port_value(self, pairs):
+        todays_value = self.cash
+        for trade in self.open_trades:
+            curr_a_price = self.original_data.loc[trade.stock_a, 'Open'].loc[str(pairs.index.date[-1])]
+            curr_b_price = self.original_data.loc[trade.stock_b, 'Open'].loc[str(pairs.index.date[-1])]
+            if trade.num_a > 0:
+                todays_value += curr_a_price
+                todays_value += (trade.price_b - curr_b_price) * abs(trade.num_b)
+            elif trade.num_b > 0:
+                todays_value += curr_b_price
+                todays_value += (trade.price_a - curr_a_price) * abs(trade.num_a)
+        return todays_value
 
     def trade_pairs(self, filtered_pairs: dict, pairs: pd.DataFrame):
         days_actions_data = dict(zip(self.returns.columns, [0] * len(self.returns.columns)))
         for stationarity, (stock_a, stock_b) in filtered_pairs:
             pair_name = '(' + stock_a + ', ' + stock_b + ')'
             # this is trading logic
-            if pairs[pair_name + '_zscore'].iloc[-1] < \
-                    pairs[pair_name + '_lower_threshold'].iloc[-1]:
+            if pairs[pair_name + '_zscore'].iloc[-1] < pairs[pair_name + '_lower_threshold'].iloc[-1]:
                 request_successful, days_actions_data = self.request_a_long_b_short(
                     days_actions=days_actions_data,
                     stock_a=stock_a,
@@ -128,8 +160,7 @@ class Algo:
                     stock_b=stock_b,
                     price_b=self.original_data.loc[stock_b, 'Open'].loc[str(pairs.index.date[-1])])
 
-            elif pairs[pair_name + '_zscore'].iloc[-1] > \
-                    pairs[pair_name + '_upper_threshold'].iloc[-1]:
+            elif pairs[pair_name + '_zscore'].iloc[-1] > pairs[pair_name + '_upper_threshold'].iloc[-1]:
                 request_successful, days_actions_data = self.request_a_short_b_long(
                     days_actions=days_actions_data,
                     stock_a=stock_a,
@@ -144,7 +175,7 @@ class Algo:
                                price_b: float) -> (bool, dict):
         if self.debt + (price_a * self.even_weight_multiplier) < self.cash + self.assets and self.cash > price_b and \
                 (self.actions.empty or (self.actions.iloc[:, -10:].loc[stock_a].abs().sum() < 5 * self.even_weight_multiplier
-                                        and self.actions.iloc[:, -10:].loc[stock_b].abs().sum() < 5 * self.even_weight_multiplier)):
+                        and self.actions.iloc[:, -10:].loc[stock_b].abs().sum() < 5 * self.even_weight_multiplier)):
             self.positions[stock_a] -= 1 * self.even_weight_multiplier
             self.positions[stock_b] += 1 * self.even_weight_multiplier
             self.debt += price_a * self.even_weight_multiplier
@@ -152,7 +183,9 @@ class Algo:
             self.assets += price_b * self.even_weight_multiplier
             days_actions[stock_a] -= 1 * self.even_weight_multiplier
             days_actions[stock_b] += 1 * self.even_weight_multiplier
-            self.open_trades.append(Trade(stock_a=stock_a, stock_b=stock_b, price_a=price_a, num_a=-1*self.even_weight_multiplier, price_b=price_b, num_b=self.even_weight_multiplier))
+            self.open_trades.append(
+                Trade(stock_a=stock_a, stock_b=stock_b, price_a=price_a, num_a=-1 * self.even_weight_multiplier,
+                      price_b=price_b, num_b=self.even_weight_multiplier))
             return True, days_actions
         else:
             return False, days_actions
@@ -161,7 +194,7 @@ class Algo:
                                price_b: float) -> (bool, dict):
         if self.debt + (price_b * self.even_weight_multiplier) < self.cash + self.assets and self.cash > price_a and \
                 (self.actions.empty or (self.actions.iloc[:, -10:].loc[stock_a].abs().sum() < 5 * self.even_weight_multiplier
-                                        and self.actions.iloc[:, -10:].loc[stock_b].abs().sum() < 5 * self.even_weight_multiplier)):
+                        and self.actions.iloc[:, -10:].loc[stock_b].abs().sum() < 5 * self.even_weight_multiplier)):
             self.positions[stock_a] += 1 * self.even_weight_multiplier
             self.positions[stock_b] -= 1 * self.even_weight_multiplier
             self.debt += price_b * self.even_weight_multiplier
@@ -169,47 +202,53 @@ class Algo:
             self.assets += price_a * self.even_weight_multiplier
             days_actions[stock_a] += 1 * self.even_weight_multiplier
             days_actions[stock_b] -= 1 * self.even_weight_multiplier
-            self.open_trades.append(Trade(stock_a=stock_a, stock_b=stock_b, price_a=price_a, num_a=self.even_weight_multiplier, price_b=price_b, num_b=-1*self.even_weight_multiplier))
+            self.open_trades.append(
+                Trade(stock_a=stock_a, stock_b=stock_b, price_a=price_a, num_a=self.even_weight_multiplier,
+                      price_b=price_b, num_b=-1 * self.even_weight_multiplier))
 
             return True, days_actions
         else:
             return False, days_actions
-    
+
     def exit_positions(self, pairs, rebalance=False):
         indices_to_delete = []
+        daily_returns_exited = dict(zip(list(self.returns.columns), [0] * len(self.returns.columns)))
         for index, trade in enumerate(self.open_trades.copy()):
             curr_a_price = self.original_data.loc[trade.stock_a, 'Open'].loc[str(pairs.index.date[-1])]
             curr_b_price = self.original_data.loc[trade.stock_b, 'Open'].loc[str(pairs.index.date[-1])]
             pair_name = '(' + trade.stock_a + ', ' + trade.stock_b + ')'
 
-            percent_change_a = ((curr_a_price - trade.price_a) / trade.price_a) * 100
-            percent_change_b = ((curr_b_price - trade.price_b) / trade.price_b) * 100
-
+            percent_change_a = ((curr_a_price - trade.price_a) / trade.price_a)
+            percent_change_b = ((curr_b_price - trade.price_b) / trade.price_b)
+            # percent_change_a < -1 * self.stop_loss or percent_change_b > self.stop_loss or
+            # percent_change_a > self.stop_loss or percent_change_b < -1 * self.stop_loss or
             if trade.num_a < 0:
-                if (percent_change_a > self.stop_loss or percent_change_b < -1*self.stop_loss) or (pairs[pair_name + '_zscore'].iloc[-1] <= pairs[pair_name + '_mean'][-1] or rebalance):
+                if percent_change_a > self.stop_loss or pairs[pair_name + '_zscore'].iloc[-1] <= pairs[pair_name + '_mean'][-1] or rebalance:
                     self.positions[trade.stock_a] -= trade.num_a
-                    self.cash += (curr_a_price - trade.price_a) * abs(trade.num_a)
+                    # TODO: Confirm shorting profit with someone
+                    self.cash += (trade.price_a - curr_a_price) * abs(trade.num_a)
                     self.debt -= trade.price_a * abs(trade.num_a)
+                    daily_returns_exited[trade.stock_a] += -1*percent_change_a
 
                     self.positions[trade.stock_b] -= trade.num_b
                     self.cash += curr_b_price * abs(trade.num_b)
                     self.assets -= trade.price_b * abs(trade.num_b)
+                    daily_returns_exited[trade.stock_b] += percent_change_b
                     indices_to_delete.append(index)
 
             if trade.num_b < 0:
-                if (percent_change_a < -1*self.stop_loss or percent_change_b > self.stop_loss) or (pairs[pair_name + '_zscore'].iloc[-1] >= pairs[pair_name + '_mean'][-1] or rebalance):
+                if percent_change_b > self.stop_loss or pairs[pair_name + '_zscore'].iloc[-1] >= pairs[pair_name + '_mean'][-1] or rebalance:
                     self.positions[trade.stock_b] -= trade.num_b
-                    self.cash += (curr_b_price - trade.price_b) * abs(trade.num_b)
+                    # TODO: Confirm shorting profit with someone
+                    self.cash += (trade.price_b - curr_b_price) * abs(trade.num_b)
                     self.debt -= trade.price_b * abs(trade.num_b)
+                    daily_returns_exited[trade.stock_b] += -1*percent_change_b
 
                     self.positions[trade.stock_a] -= trade.num_a
                     self.cash += curr_a_price * abs(trade.num_a)
                     self.assets -= trade.price_a * abs(trade.num_a)
+                    daily_returns_exited[trade.stock_a] += percent_change_a
                     indices_to_delete.append(index)
-            #stoploss: we need to have a check if our trade goes 2% below the point we bought it at. if it does, we
-            #cover our losses and buy it back
-
-
 
         for index in reversed(indices_to_delete):
             self.open_trades.remove(self.open_trades[index])
@@ -219,6 +258,10 @@ class Algo:
         pairs = pd.DataFrame()
         filtered_pairs = []
         curr_pairs_to_delete = []
+        curr_pairs.extend(self.previous_months_pairs_open)
+        unique_arr = np.unique(curr_pairs, axis=0)
+        # Convert back to list of tuples if needed
+        curr_pairs = [tuple(row) for row in unique_arr]
         for index, (stock_a, stock_b) in enumerate(curr_pairs.copy()):
             # converts into resid = stock_a - m(stock_b)
             stock_b_preprocessed = sm.add_constant(curr_data[stock_b])
@@ -235,29 +278,21 @@ class Algo:
                     curr_pairs_to_delete.append(index)
                     continue
 
-            # we are checking for stationarity of the residuals now to make sure the spreads themselves are mean
-            # reverting. before this would work if on the original series if we were doing prices, because it would
-            # just be the difference between them. but now since we are doing a regression, we need to check for
-            # stationarity after we find our pairs, then filter them down here with an adfuller test
             hedge_ratio = model.params[1]
             spread = curr_data[stock_a] - hedge_ratio * curr_data[stock_b]
             residual_stationarity = adfuller(spread)[1]
-
-            # spread_lag = spread.shift(1).dropna()
-            # spread_lag, spread = spread_lag.align(spread)
-            # spread_lag = sm.add_constant(spread_lag)
-            # model = sm.OLS(spread, spread_lag).fit()
-            lambda_estimate = model.params[1]
             if initial_update:
                 if residual_stationarity < 0.05:
                     filtered_pairs.append((residual_stationarity, (stock_a, stock_b)))
                     pairs[pair_name] = spread
                     pairs[pair_name + '_mean'] = pairs[pair_name].mean()
-                    pairs[pair_name + '_zscore'] = (pairs[pair_name] - pairs[pair_name + '_mean']) / pairs[pair_name].std()
+                    pairs[pair_name + '_zscore'] = (pairs[pair_name] - pairs[pair_name + '_mean']) / pairs[
+                        pair_name].std()
                     pairs[pair_name + '_upper_threshold'] = pairs[pair_name + '_zscore'].mean() + (
                             2 * pairs[pair_name + '_zscore'].std())
                     pairs[pair_name + '_lower_threshold'] = pairs[pair_name + '_zscore'].mean() - (
                             2 * pairs[pair_name + '_zscore'].std())
+                    self.plot_zscores(pairs, pair_name, stock_a, stock_b)
                 else:
                     curr_pairs_to_delete.append(index)
             else:
@@ -270,15 +305,16 @@ class Algo:
                 pairs[pair_name + '_lower_threshold'] = pairs[pair_name + '_zscore'].mean() - (
                         2 * pairs[pair_name + '_zscore'].std())
 
-            # self.plot_zscores(pairs, pair_name, stock_a, stock_b)
-
         for index in reversed(curr_pairs_to_delete):
             curr_pairs.remove(curr_pairs[index])
 
+        filtered_pairs = [(stationary, (stock_a, stock_b)) for (stationary, (stock_a, stock_b)) in filtered_pairs if
+                          (stock_a, stock_b) not in self.previous_months_pairs_open]
         return sorted(filtered_pairs), pairs
 
     def plot_zscores(self, pairs_df, pair_name, stock_a, stock_b):
         # Extracting z-score data
+        spread = pairs_df[pair_name] * 10
         zscores = pairs_df[pair_name + '_zscore']
         upper_threshold = pairs_df[pair_name + '_upper_threshold']
         lower_threshold = pairs_df[pair_name + '_lower_threshold']
@@ -295,6 +331,7 @@ class Algo:
         ax1.plot(zscores.index, upper_threshold, label='Upper Threshold', linestyle='--', color='red')
         ax1.plot(zscores.index, lower_threshold, label='Lower Threshold', linestyle='--', color='green')
         ax1.plot(zscores.index, mean_zscore, color='black', linestyle='--', label='Mean')
+        ax1.plot(zscores.index, spread, color='black', linestyle='--', label='spread')
         ax1.set_xlabel('Date')
         ax1.set_ylabel('Z-Score', color='blue')
         ax1.legend(loc='upper left')
@@ -313,5 +350,13 @@ class Algo:
 
 
 if __name__ == '__main__':
-    algo = Algo(Path('./getting-started/train_data_50.csv'), use_log_returns=True)
+    algo = Algo(Path('./getting-started/train_data_50.csv'),
+                use_log_returns=True,
+                n_components=18,
+                n_clusters=6,
+                stop_loss=0.8,
+                even_weight_multiplier=40)
+    print("Starting portfolio value:", algo.cash)
     algo.run_pairs()
+    print("Ending portfolio value:", algo.cash)
+    print()
