@@ -356,7 +356,27 @@ if __name__ == '__main__':
                 n_clusters=6,
                 stop_loss=0.8,
                 even_weight_multiplier=40)
-    print("Starting portfolio value:", algo.cash)
+
+
+    parser = argparse.ArgumentParser(description="Team 1 Pairs Trading Algorithm")
+
+    parser.add_argument(
+        "-p",
+        "--prices",
+        help="path to stock prices csv file",
+    )
+
+    prices_path = parser.parse_args().prices
+
+    if prices_path is None:
+        print("Please provide a path to a stock prices csv file using: main_algo.py -p <path to file>")
+        exit(1)
+
+    algo = Algo(Path(prices_path), use_log_returns=True,
+                n_components=18,
+                n_clusters=6,
+                stop_loss=0.8,
+                even_weight_multiplier=40)
+
     algo.run_pairs()
-    print("Ending portfolio value:", algo.cash)
-    print()
+    np.save('actions_array.npy', algo.actions.values)
