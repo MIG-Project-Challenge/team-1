@@ -3,15 +3,14 @@ import pandas as pd
 import numpy as np
 import statsmodels.api as sm
 import matplotlib.pyplot as plt
+import argparse
 
 from pathlib import Path
-from datetime import datetime
 from pydantic import BaseModel
 from tqdm.auto import tqdm
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
-from statsmodels.tsa.stattools import coint
 from statsmodels.tsa.stattools import adfuller
 
 
@@ -32,10 +31,6 @@ class Algo:
         self.original_data = pd.read_csv(data_path)
         self.original_data['Date'] = pd.to_datetime(self.original_data['Date'])
         self.original_data.set_index(['Ticker', 'Date'], inplace=True)
-        # TODO: REMOVE JUST TESTING
-        self.original_data = self.original_data[(self.original_data.index.get_level_values('Date') >= datetime(2017, 1, 1)) &
-                           (self.original_data.index.get_level_values('Date') <= datetime(2017, 6, 1))]
-
 
         self.use_log_returns = use_log_returns
         self.original_data['Ret'] = self.original_data['Open'].groupby('Ticker').pct_change()
@@ -174,7 +169,8 @@ class Algo:
     def request_a_short_b_long(self, days_actions: dict, stock_a: str, stock_b: str, price_a: float,
                                price_b: float) -> (bool, dict):
         if self.debt + (price_a * self.even_weight_multiplier) < self.cash + self.assets and self.cash > price_b and \
-                (self.actions.empty or (self.actions.iloc[:, -10:].loc[stock_a].abs().sum() < 5 * self.even_weight_multiplier
+                (self.actions.empty or (
+                        self.actions.iloc[:, -10:].loc[stock_a].abs().sum() < 5 * self.even_weight_multiplier
                         and self.actions.iloc[:, -10:].loc[stock_b].abs().sum() < 5 * self.even_weight_multiplier)):
             self.positions[stock_a] -= 1 * self.even_weight_multiplier
             self.positions[stock_b] += 1 * self.even_weight_multiplier
@@ -193,7 +189,8 @@ class Algo:
     def request_a_long_b_short(self, days_actions: dict, stock_a: str, stock_b: str, price_a: float,
                                price_b: float) -> (bool, dict):
         if self.debt + (price_b * self.even_weight_multiplier) < self.cash + self.assets and self.cash > price_a and \
-                (self.actions.empty or (self.actions.iloc[:, -10:].loc[stock_a].abs().sum() < 5 * self.even_weight_multiplier
+                (self.actions.empty or (
+                        self.actions.iloc[:, -10:].loc[stock_a].abs().sum() < 5 * self.even_weight_multiplier
                         and self.actions.iloc[:, -10:].loc[stock_b].abs().sum() < 5 * self.even_weight_multiplier)):
             self.positions[stock_a] += 1 * self.even_weight_multiplier
             self.positions[stock_b] -= 1 * self.even_weight_multiplier
@@ -223,12 +220,13 @@ class Algo:
             # percent_change_a < -1 * self.stop_loss or percent_change_b > self.stop_loss or
             # percent_change_a > self.stop_loss or percent_change_b < -1 * self.stop_loss or
             if trade.num_a < 0:
-                if percent_change_a > self.stop_loss or pairs[pair_name + '_zscore'].iloc[-1] <= pairs[pair_name + '_mean'][-1] or rebalance:
+                if percent_change_a > self.stop_loss or pairs[pair_name + '_zscore'].iloc[-1] <= \
+                        pairs[pair_name + '_mean'][-1] or rebalance:
                     self.positions[trade.stock_a] -= trade.num_a
                     # TODO: Confirm shorting profit with someone
                     self.cash += (trade.price_a - curr_a_price) * abs(trade.num_a)
                     self.debt -= trade.price_a * abs(trade.num_a)
-                    daily_returns_exited[trade.stock_a] += -1*percent_change_a
+                    daily_returns_exited[trade.stock_a] += -1 * percent_change_a
 
                     self.positions[trade.stock_b] -= trade.num_b
                     self.cash += curr_b_price * abs(trade.num_b)
@@ -237,12 +235,13 @@ class Algo:
                     indices_to_delete.append(index)
 
             if trade.num_b < 0:
-                if percent_change_b > self.stop_loss or pairs[pair_name + '_zscore'].iloc[-1] >= pairs[pair_name + '_mean'][-1] or rebalance:
+                if percent_change_b > self.stop_loss or pairs[pair_name + '_zscore'].iloc[-1] >= \
+                        pairs[pair_name + '_mean'][-1] or rebalance:
                     self.positions[trade.stock_b] -= trade.num_b
                     # TODO: Confirm shorting profit with someone
                     self.cash += (trade.price_b - curr_b_price) * abs(trade.num_b)
                     self.debt -= trade.price_b * abs(trade.num_b)
-                    daily_returns_exited[trade.stock_b] += -1*percent_change_b
+                    daily_returns_exited[trade.stock_b] += -1 * percent_change_b
 
                     self.positions[trade.stock_a] -= trade.num_a
                     self.cash += curr_a_price * abs(trade.num_a)
@@ -292,7 +291,6 @@ class Algo:
                             2 * pairs[pair_name + '_zscore'].std())
                     pairs[pair_name + '_lower_threshold'] = pairs[pair_name + '_zscore'].mean() - (
                             2 * pairs[pair_name + '_zscore'].std())
-                    self.plot_zscores(pairs, pair_name, stock_a, stock_b)
                 else:
                     curr_pairs_to_delete.append(index)
             else:
@@ -350,14 +348,6 @@ class Algo:
 
 
 if __name__ == '__main__':
-    algo = Algo(Path('./getting-started/train_data_50.csv'),
-                use_log_returns=True,
-                n_components=18,
-                n_clusters=6,
-                stop_loss=0.8,
-                even_weight_multiplier=40)
-
-
     parser = argparse.ArgumentParser(description="Team 1 Pairs Trading Algorithm")
 
     parser.add_argument(
@@ -372,7 +362,8 @@ if __name__ == '__main__':
         print("Please provide a path to a stock prices csv file using: main_algo.py -p <path to file>")
         exit(1)
 
-    algo = Algo(Path(prices_path), use_log_returns=True,
+    algo = Algo(Path(prices_path),
+                use_log_returns=True,
                 n_components=18,
                 n_clusters=6,
                 stop_loss=0.8,
