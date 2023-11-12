@@ -105,49 +105,81 @@ class Algo:
         return dict(zip(ret.columns, optimal))
 
     def run_port_opt(self):
+        # go through all testing data
         for index, row in enumerate(self.testing_returns.iterrows()):
+            # if it's the beginning of our rebalancing period, rebalance
             if not index % 20:
+                # get our weights
                 optimized_weights = self.max_sharpe(self.training_returns.iloc[index:])
+                # exit positions completely (will all be 0s on first iteration, then the opposite of our positions afterwards)
                 actions = self.exit_positions(index)
+                # for each stock in our universe...
                 for index2, stock in enumerate(self.returns.columns):
+                    # figure out how much cash to allocate
                     cash_to_allocate = self.cash * optimized_weights[stock]
+                    # get current price
                     curr_price = self.open_prices[stock].iloc[index: index + 1].values[0]
+
+                    # determine number of shares
                     num_shares = 0
                     if cash_to_allocate != 0:
                         num_shares = int(math.floor(cash_to_allocate / curr_price))
+
+                    # if we do want to buy, (need to figure out selling to) then create a trade, and manipulate our cash and assets
+                    # TODO: fix short so that we manage our debt and stuff. might want to break into if num_shares > 0
+                    #  and if num_shares < 0 for shorting
                     if num_shares != 0 and num_shares * curr_price < self.cash:
                         self.open_trades.append(Trade(stock=stock, price=curr_price, num_shares=num_shares))
                         self.cash -= (num_shares * curr_price)
                         self.assets += (num_shares * curr_price)
+                    # anything we want to buy again add back to actions. if we sold all our positions,
+                    # and bought them all back, equivalent to doing nothing today
                     actions[index2] += num_shares
+                    # same with positions
                     self.positions[index2] += num_shares
 
+                # append the days actions to actions
                 self.actions = pd.concat([self.actions, pd.Series(index=self.testing_returns.columns,
                                                                   data=actions,
                                                                   name=row[0])], axis=1)
+                # roll over training returns so we extend our training window for portopt
                 self.training_returns = pd.concat([self.training_returns, self.testing_returns.iloc[index: index + 1]])
                 continue
 
+            # fill with 0s when we don't rebalance
             self.actions = pd.concat([self.actions, pd.Series(index=self.testing_returns.columns,
                                                               data=len(self.testing_returns.columns) * [0],
                                                               name=row[0])], axis=1)
             self.training_returns = pd.concat([self.training_returns, self.testing_returns.iloc[index: index + 1]])
 
     def exit_positions(self, index):
+        # start with blank actions
         actions = [0] * len(self.positions)
         win_rate = 0
+        # for each open trade...
         for trade in self.open_trades:
+            # get the index of this stock in our positions list
             stock_idx = list(self.testing_returns.columns).index(trade.stock)
+            # reset positions (right now this assumes we are always selling to exit, because we always long
+            # if we are shorting, need to check sign of num_shares to see if we buy back or sell off.
             self.positions[stock_idx] -= trade.num_shares
+            # same with actions
             actions[stock_idx] -= trade.num_shares
 
+            # get current price
             curr_price = self.open_prices[trade.stock].iloc[index: index + 1].values[0]
+            # statistics calculation for how often we win
             if (curr_price > trade.price):
                 win_rate += 1
+
+            # manipulate cash and assets. again this is assumign we are only longing.
+            # if we are shorting too, this needs to be in if conditions
             self.cash += curr_price * trade.num_shares
             self.assets -= trade.num_shares * trade.price
+
         if len(self.open_trades):
             print(win_rate / len(self.open_trades))
+        # clear our open trades since we did everything we could with them
         self.open_trades.clear()
         return actions
 
