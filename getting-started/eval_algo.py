@@ -20,7 +20,7 @@ def calc_sharpe_ratio(portfolio_values):
     return sharpe_ratio
 
 
-def eval_actions(actions, prices, cash=10, verbose=True):
+def eval_actions(actions, prices, cash=25000, verbose=True):
     cash = cash
     positions = [0] * len(actions)
     port_values = [0] * len(actions[0])
@@ -156,6 +156,6 @@ if __name__ == "__main__":
     prices = np.load(args.prices)
     actions = np.load(args.actions)
 
-    assert prices.size() == actions.size(), "prices and actions must be the same size"
+    assert prices.size == actions.size, "prices and actions must be the same size"
 
     print(eval_actions(actions, prices))
