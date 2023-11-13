@@ -30,8 +30,9 @@ class Algo:
         self.training_data.set_index(['Ticker', 'Date'], inplace=True)
         self.training_returns = self.training_data['Open'].groupby('Ticker').pct_change()
         self.training_returns.dropna(inplace=True)
+        self.training_returns = self.training_returns.unstack().T
 
-        self.testing_data = pd.concat(testing_data_slices)
+        self.testing_data = self.original_data
         self.open_prices = self.testing_data['Open'].unstack(level='Ticker')
 
         self.testing_returns = self.returns
@@ -205,13 +206,6 @@ class Algo:
                 actions[stock_idx] += abs(trade.num_shares)
                 self.cash += (trade.price - curr_price) * trade.num_shares
                 self.debt -= abs(trade.num_shares) * trade.price
-
-            # get current price
-            # statistics calculation for how often we win
-
-
-            # manipulate cash and assets. again this is assumign we are only longing.
-            # if we are shorting too, this needs to be in if conditions
 
         if len(self.open_trades):
             print(win_rate / len(self.open_trades))
