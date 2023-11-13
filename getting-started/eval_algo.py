@@ -60,31 +60,40 @@ def eval_actions(actions, prices, cash=25000, verbose=True):
         if port_values[day] < 0:
             # TODO: return portfolio here
             print("DEBT LIMIT HIT (likely too many short positions)")
+            print("occurred on day: ", day, " last port value: ", port_values[day])
+
             return 0, 0
 
         for stock in range(len(actions)):
             # case 1: we have a positive position and are buying
             # or don't have a position yet
             if positions[stock] >= 0 and actions[stock][day] > 0:
-                cash -= prices[stock][day] * actions[stock][day]
+                if (cash >= prices[stock][day] * actions[stock][day]):
+                    cash -= prices[stock][day] * actions[stock][day]
 
-                if not cashValid():
-                    # TODO: return portfolio here
-                    print("INVALID CASH AMOUNT, COULD NOT AFFORD TRANSACTION")
-                    return 0, 0
+                    #if not cashValid():
+                    #    cash += prices[stock][day] * actions[stock][day]
+                    #    # TODO: return portfolio here
+                    #    print("INVALID CASH AMOUNT, COULD NOT AFFORD TRANSACTION")
+                    #    #return 0, 0
 
-                positions[stock] += actions[stock][day]
+                    positions[stock] += actions[stock][day]
 
             # case 2: we have short a position and are buying
             elif positions[stock] < 0 and actions[stock][day] > 0:
                 buy_amount = min(actions[stock][day] - abs(positions[stock]), 0)
                 short_close_amount = min(abs(positions[stock]), actions[stock][day])
 
+                positions[stock] += short_close_amount # remove the amount of closed shorted shares
+
                 while short_close_amount > 0:
                     # the amount of positions to close in the current short order
+                    positions_to_close = 0
+
                     positions_to_close = min(
                         short_positions[stock][0][1], short_close_amount
-                    )
+                    ) # TODO: error here??
+
                     short_close_amount -= positions_to_close
 
                     # the short value is = (short price - curr price)*amount of shares shorted
@@ -97,7 +106,7 @@ def eval_actions(actions, prices, cash=25000, verbose=True):
 
                     else:
                         # subtract the amount of closed shares from the given price
-                        short_positions[0][1] -= positions_to_close
+                        short_positions[stock][0][1] -= positions_to_close
 
                 if buy_amount > 0:
                     cash -= prices[stock][day] * buy_amount
@@ -156,6 +165,9 @@ if __name__ == "__main__":
     prices = np.load(args.prices)
     actions = np.load(args.actions)
 
-    assert prices.size == actions.size, "prices and actions must be the same size"
+    print("price shape:", prices.shape)
+    print("actions shape:", actions.shape)
+
+    assert prices.shape == actions.shape, "prices and actions must be the same shape"
 
     print(eval_actions(actions, prices))
