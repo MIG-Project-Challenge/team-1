@@ -80,37 +80,6 @@ class Algo:
         optimal = [round(i, 10) for i in optimal['x']]
         return dict(zip(ret.columns, optimal))
 
-    @staticmethod
-    def minimum_variance(ret: pd.DataFrame, short_only=False, long_only=False):
-        def find_port_variance(weights):
-            # this is actually std
-            cov = ret.cov()
-            port_var = np.sqrt(np.dot(weights.T, np.dot(cov, weights)) * 252)
-            return port_var
-
-        bounds = (-1, 1)
-        if short_only:
-            bounds = (-1, 0)
-        elif long_only:
-            bounds = (0, 1)
-
-        def weight_cons(weights):
-            return np.sum(weights) - 1
-
-        bounds_lim = [bounds for x in range(len(ret.columns))]
-        init = [1 / len(ret.columns) for i in range(len(ret.columns))]
-        constraint = {'type': 'eq', 'fun': weight_cons}
-
-        optimal = minimize(fun=find_port_variance,
-                           x0=init,
-                           bounds=bounds_lim,
-                           constraints=constraint,
-                           method='SLSQP'
-                           )
-        optimal = [round(i, 10) for i in optimal['x']]
-        return dict(zip(ret.columns, optimal))
-#2 port opps, 1 that only shorts 1 that only longs each w half of our cash, optimize both of those and execute our
-    # trades
     def run_port_opt(self):
         # go through all testing data
         for index, row in enumerate(self.testing_returns.iterrows()):
@@ -137,8 +106,6 @@ class Algo:
                         num_shares = int(math.floor(cash_to_allocate / curr_price))
 
                     # if we do want to buy, (need to figure out selling to) then create a trade, and manipulate our cash and assets
-                    # TODO: fix short so that we manage our debt and stuff. might want to break into if num_shares > 0
-                    #  and if num_shares < 0 for shorting
                     if num_shares > 0 and num_shares * curr_price < self.cash:
                         self.open_trades.append(Trade(stock=stock, price=curr_price, num_shares=num_shares))
                         self.cash -= (num_shares * curr_price)
@@ -149,11 +116,6 @@ class Algo:
                         self.debt += short_value
                     else:
                         continue
-
-                    # if num_shares != 0 and num_shares * curr_price < self.cash:
-                    #     self.open_trades.append(Trade(stock=stock, price=curr_price, num_shares=num_shares))
-                    #     self.cash -= (num_shares * curr_price)
-                    #     self.assets += (num_shares * curr_price)
 
                     # anything we want to buy again add back to actions. if we sold all our positions,
                     # and bought them all back, equivalent to doing nothing today
